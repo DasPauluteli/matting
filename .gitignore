@@ -6,6 +6,7 @@
 /models/
 *.mxr
 /.mxr-cache/
+/models_unpatched/
 
 # Throwaway venv from the spike phase.
 /.venv-tools/

@@ -116,6 +116,17 @@ pub fn run(args: &PrepareArgs) -> Result<()> {
     println!("Wrote {}", frozen_path.display());
 
     set_migraphx_cache_env(&dir)?;
+    // Only one prepared model is valid at a time, and MIGraphX probes every
+    // .mxr in its cache directory — a leftover from a previous `prepare` makes
+    // it log "param type mismatch" on every load. Clear them out first.
+    let mxr = mxr_dir(&dir);
+    for entry in std::fs::read_dir(&mxr)?.flatten() {
+        if entry.path().extension().is_some_and(|e| e == "mxr") {
+            std::fs::remove_file(entry.path())
+                .with_context(|| format!("removing stale cache {}", entry.path().display()))?;
+        }
+    }
+
     println!("Compiling for MIGraphX. First run takes a few minutes.");
     let start = std::time::Instant::now();
     ort::init().commit();

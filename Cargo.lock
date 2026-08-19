@@ -801,6 +801,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "ctrlc",
+ "half",
  "image",
  "onnx-protobuf",
  "ort",

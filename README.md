@@ -114,7 +114,30 @@ Download a stock export from the
 - `rvm_resnet50_fp32.onnx` — better quality, the default
 - `rvm_mobilenetv3_fp32.onnx` — faster, lighter
 
-Models are not redistributed here; RVM has its own licence.
+The `_fp16` exports work too and are half the size. They make no practical
+difference to speed, because MIGraphX compiles the graph to fp16 either way.
+
+RVM ships only these two backbones; there is no larger or newer variant to
+move up to. Models are not redistributed here; RVM has its own licence.
+
+### Choosing `--ratio`
+
+`--ratio` sets how far the frame is downscaled before the model looks at it.
+The model works coarsely at that size, then refines at full resolution, so this
+is the main quality/speed dial.
+
+RVM's guidance is that the **downscaled resolution should land between 256 and
+512**, and that a higher ratio is *not* automatically better. At 1024×576:
+
+| `--ratio` | Model sees | Notes |
+|---|---|---|
+| 0.375 | 384×216 | Good for head-and-shoulders framing |
+| 0.5 (default) | 512×288 | Top of the recommended range |
+| 1.0 | 1024×576 | Outside the range, and roughly 2× the cost |
+
+Measured here at 1024×576 with ResNet50: ratio 0.5 costs about 17 ms per frame,
+ratio 1.0 about 39 ms. If you are framed close to the camera, `0.375` is worth
+trying — it is both faster and closer to what the model was tuned for.
 
 ## Usage
 

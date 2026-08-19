@@ -12,6 +12,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4.6.9"
 ctrlc = "3.5.2"
+half = "2.7.1"
 image = "0.25"
 onnx-protobuf = "0.2.3"
 # onnx-protobuf 0.2.3's generated code asserts protobuf::VERSION_3_4_0, so the

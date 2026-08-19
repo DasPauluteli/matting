@@ -152,6 +152,48 @@ mod tests {
         assert_eq!(read_state_channels(&m).unwrap(), [16, 32, 64, 128]);
     }
 
+    /// The spatial formula is a guess about RVM's internals, so check it
+    /// against what the real model actually emits, at several ratios.
+    #[test]
+    fn predicted_state_shapes_match_the_real_model() {
+        use ort::{session::Session, session::SessionInputValue, value::Tensor};
+        let Some(path) = model_path("MATTING_TEST_RVM_RESNET50") else { return };
+        let Some(m) = r50() else { return };
+        let (w, h) = (1024usize, 576usize);
+
+        for ratio in [0.25f32, 0.375, 0.5, 0.75, 1.0] {
+            let predicted = state_shapes(&m, w as u32, h as u32, ratio).unwrap();
+            let mut session = Session::builder().unwrap().commit_from_file(&path).unwrap();
+            let inputs: Vec<(std::borrow::Cow<str>, SessionInputValue)> = vec![
+                (
+                    "src".into(),
+                    Tensor::from_array((vec![1i64, 3, h as i64, w as i64], vec![0.5f32; 3 * w * h]))
+                        .unwrap()
+                        .into(),
+                ),
+                ("r1i".into(), Tensor::from_array((vec![1i64, 1, 1, 1], vec![0f32])).unwrap().into()),
+                ("r2i".into(), Tensor::from_array((vec![1i64, 1, 1, 1], vec![0f32])).unwrap().into()),
+                ("r3i".into(), Tensor::from_array((vec![1i64, 1, 1, 1], vec![0f32])).unwrap().into()),
+                ("r4i".into(), Tensor::from_array((vec![1i64, 1, 1, 1], vec![0f32])).unwrap().into()),
+                ("downsample_ratio".into(), Tensor::from_array((vec![1i64], vec![ratio])).unwrap().into()),
+            ];
+            let outputs = session.run(inputs).unwrap();
+            for n in 0..4 {
+                let (shape, _) = outputs[format!("r{}o", n + 1).as_str()]
+                    .try_extract_tensor::<f32>()
+                    .unwrap();
+                let actual = (shape[2], shape[3]);
+                assert_eq!(
+                    predicted.spatial[n], actual,
+                    "ratio {ratio}: r{}o predicted {:?} but model emits {:?}",
+                    n + 1,
+                    predicted.spatial[n],
+                    actual
+                );
+            }
+        }
+    }
+
     #[test]
     fn computes_state_spatial_dims() {
         let Some(m) = mnv3() else { return };
