@@ -219,8 +219,12 @@ Measured on a Radeon 8060S (`gfx1151`, Ryzen AI MAX+ 395) at 1024×576, ROCm
 | Model inference, CPU | 104 ms | 74 ms |
 
 End to end — inference plus colour conversion and compositing — the pipeline
-costs about **21 ms per frame**, giving headroom for roughly 45 fps at
-1024×576. In that state it used a little under one CPU core.
+costs about **17–18 ms per frame** in `alpha` mode at 1024×576, giving headroom
+for roughly 55 fps. `greenscreen` and `image` add a YUYV encode and cost a few
+milliseconds more. In that state it used a little under one CPU core.
+
+Most of the non-inference time is scalar colour conversion, so there is room
+left for anyone who wants to reach for SIMD.
 
 If you need more speed: use `--model mobilenetv3`, or lower `--ratio` (0.25
 instead of 0.5) when preparing, which shrinks the resolution the model works at.

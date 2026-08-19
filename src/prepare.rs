@@ -85,6 +85,7 @@ pub fn build_manifest(
 }
 
 pub fn run(args: &PrepareArgs) -> Result<()> {
+    args.validate().map_err(anyhow::Error::msg)?;
     let source = Path::new(&args.from);
     let dir = cache_dir();
     std::fs::create_dir_all(&dir)?;

@@ -50,8 +50,14 @@ impl V4lSink {
         let fmt = Output::set_format(&dev, &fmt).context("setting output format")?;
 
         if fmt.width != width || fmt.height != height || fmt.fourcc != fourcc_for(mode) {
+            // v4l2loopback pins its format for as long as a consumer has the
+            // device open, so switching modes while OBS (or a browser, or
+            // ffplay) is watching fails here rather than at startup.
             return Err(anyhow!(
-                "{path} would not accept {} {width}x{height}; it chose {} {}x{}",
+                "{path} would not accept {} {width}x{height}; it is currently {} {}x{}.\n\
+                 This usually means something else still has the device open — a virtual \
+                 camera keeps its pixel format while a consumer is attached.\n\
+                 Close whatever is viewing it (check with `fuser -v {path}`), then try again.",
                 fourcc_for(mode),
                 fmt.fourcc,
                 fmt.width,

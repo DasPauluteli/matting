@@ -23,15 +23,34 @@ impl V4lSource {
     pub fn open(path: &str, width: u32, height: u32) -> Result<V4lSource> {
         let dev = Device::with_path(path).with_context(|| format!("opening {path}"))?;
 
-        let mut fmt = Capture::format(&dev).context("querying capture format")?;
-        fmt.width = width;
-        fmt.height = height;
-        fmt.fourcc = FourCC::new(b"YUYV");
-        let fmt = Capture::set_format(&dev, &fmt).context("setting capture format")?;
+        let wanted = FourCC::new(b"YUYV");
+        let current = Capture::format(&dev).context("querying capture format")?;
 
-        if fmt.width != width || fmt.height != height || fmt.fourcc != FourCC::new(b"YUYV") {
+        // Only reconfigure when we have to. A device that already has a
+        // producer attached — common when the "webcam" is itself a loopback —
+        // rejects VIDIOC_S_FMT with EBUSY, but is perfectly usable as-is when
+        // it already carries the format we want.
+        let fmt = if current.width == width && current.height == height && current.fourcc == wanted {
+            current
+        } else {
+            let mut desired = current;
+            desired.width = width;
+            desired.height = height;
+            desired.fourcc = wanted;
+            Capture::set_format(&dev, &desired).with_context(|| {
+                format!(
+                    "setting {path} to YUYV {width}x{height} (it is currently {} {}x{}). \
+                     If something else is already streaming from this device, either stop it \
+                     or run `matting prepare` with --width/--height matching what it provides",
+                    current.fourcc, current.width, current.height
+                )
+            })?
+        };
+
+        if fmt.width != width || fmt.height != height || fmt.fourcc != wanted {
             return Err(anyhow!(
-                "{path} would not accept YUYV {width}x{height}; it offered {} {}x{}",
+                "{path} would not accept YUYV {width}x{height}; it offered {} {}x{}. \
+                 Run `v4l2-ctl -d {path} --list-formats-ext` to see what it supports",
                 fmt.fourcc,
                 fmt.width,
                 fmt.height

@@ -101,6 +101,39 @@ pub struct PrepareArgs {
     pub ratio: f32,
 }
 
+impl PrepareArgs {
+    pub fn validate(&self) -> Result<(), String> {
+        // YUYV 4:2:2 encodes two pixels per macropixel, so an odd width would
+        // silently drop the last column rather than fail.
+        if self.width == 0 || !self.width.is_multiple_of(2) {
+            return Err(format!(
+                "--width must be even and non-zero (YUYV pairs pixels horizontally), got {}",
+                self.width
+            ));
+        }
+        if self.height == 0 {
+            return Err("--height must be non-zero".into());
+        }
+        if !(self.ratio > 0.0 && self.ratio <= 1.0) {
+            return Err(format!(
+                "--ratio must be greater than 0 and at most 1, got {}",
+                self.ratio
+            ));
+        }
+        // The model downsamples to ratio*size and then halves four more times;
+        // too small and the recurrent state collapses to zero-sized tensors.
+        let smallest = (self.width.min(self.height) as f32 * self.ratio) as u32 / 16;
+        if smallest == 0 {
+            return Err(format!(
+                "--ratio {} is too small for {}x{}: the model's internal state would \
+                 collapse to zero size. Try a larger ratio.",
+                self.ratio, self.width, self.height
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Args, Debug)]
 #[command(
     after_help = "MODES:\n  \
@@ -218,6 +251,41 @@ mod tests {
         assert!(parse_color("#GGGGGG").is_err());
         assert!(parse_color("1,2").is_err());
         assert!(parse_color("300,0,0").is_err());
+    }
+
+    fn prepare_args(width: u32, height: u32, ratio: f32) -> PrepareArgs {
+        PrepareArgs {
+            from: "model.onnx".into(),
+            model: Backbone::Resnet50,
+            width,
+            height,
+            ratio,
+        }
+    }
+
+    #[test]
+    fn accepts_sensible_geometry() {
+        assert!(prepare_args(1024, 576, 0.5).validate().is_ok());
+        assert!(prepare_args(1280, 720, 1.0).validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_odd_width_that_would_drop_a_column() {
+        let err = prepare_args(1023, 576, 0.5).validate().unwrap_err();
+        assert!(err.contains("even"), "{err}");
+    }
+
+    #[test]
+    fn rejects_out_of_range_ratio() {
+        assert!(prepare_args(1024, 576, 0.0).validate().is_err());
+        assert!(prepare_args(1024, 576, -0.5).validate().is_err());
+        assert!(prepare_args(1024, 576, 1.5).validate().is_err());
+    }
+
+    #[test]
+    fn rejects_ratio_that_would_collapse_recurrent_state() {
+        let err = prepare_args(1024, 576, 0.01).validate().unwrap_err();
+        assert!(err.contains("collapse"), "{err}");
     }
 
     #[test]

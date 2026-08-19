@@ -146,10 +146,12 @@ pub fn run(args: &RunArgs) -> Result<()> {
     let mut window_start = std::time::Instant::now();
     let mut infer_total = std::time::Duration::ZERO;
     loop {
+        // Borrowed, not copied: `source` and `pipeline` are separate bindings,
+        // so the frame can be handed straight through.
         let frame = match source.next_frame() {
             Ok(f) => {
                 failures = 0;
-                f.to_vec()
+                f
             }
             Err(e) => {
                 // Don't let a message land on top of the in-place status line.
@@ -168,7 +170,7 @@ pub fn run(args: &RunArgs) -> Result<()> {
             }
         };
         let t0 = std::time::Instant::now();
-        let out = match pipeline.process(&frame) {
+        let out = match pipeline.process(frame) {
             Ok(out) => out,
             Err(e) => {
                 // Leave the cursor on a clean line before the error surfaces.

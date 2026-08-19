@@ -3,14 +3,11 @@
 
 # ONNX weights and MIGraphX compiled caches are large and regenerable via
 # `matting prepare`.
-/models/*.onnx
+/models/
 *.mxr
 /.mxr-cache/
 
 # Throwaway venv from the spike phase.
 /.venv-tools/
-
-# Local model files.
-/models/
-
+# Design and planning notes stay local.
 /docs/

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use ort::{
     ep,
     session::{Session, SessionInputValue},
-    value::{DynValue, Tensor, ValueType},
+    value::{DynValue, Tensor, TensorRef, ValueType},
 };
 
 /// Holds the ORT session plus RVM's four recurrent state tensors.
@@ -88,9 +88,10 @@ impl Matting {
         };
         let [r1, r2, r3, r4] = state;
 
-        let src = Tensor::from_array((
+        // Borrow the caller's buffer rather than copying ~7 MB per frame.
+        let src = TensorRef::from_array_view((
             vec![1i64, 3, self.height as i64, self.width as i64],
-            rgb_nchw.to_vec(),
+            rgb_nchw,
         ))?;
 
         let inputs: Vec<(std::borrow::Cow<str>, SessionInputValue)> = vec![
