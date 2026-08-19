@@ -1,0 +1,11 @@
+/target
+**/target
+
+# ONNX weights and MIGraphX compiled caches are large and regenerable via
+# `matting prepare`.
+/models/*.onnx
+*.mxr
+/.mxr-cache/
+
+# Throwaway venv from the spike phase.
+/.venv-tools/
