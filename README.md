@@ -78,7 +78,7 @@ Package names differ by distribution.
 **Arch / CachyOS:**
 
 ```sh
-pkexec pacman -S rocm-hip-sdk migraphx v4l2loopback-dkms v4l-utils rust
+sudo pacman -S rocm-hip-sdk migraphx v4l2loopback-dkms v4l-utils rust
 # ONNX Runtime with the MIGraphX provider, from the AUR:
 paru -S onnxruntime-opt-rocm
 ```
@@ -143,14 +143,14 @@ rather than quietly misbehaving.
 If `v4l2loopback` is not loaded yet:
 
 ```sh
-pkexec modprobe v4l2loopback devices=1 video_nr=9 card_label=Matting exclusive_caps=1
+sudo modprobe v4l2loopback devices=1 video_nr=9 card_label=Matting exclusive_caps=1
 ```
 
 If it is already loaded for something else, add a device instead of reloading
 the module — reloading would disconnect whatever is using it:
 
 ```sh
-pkexec v4l2loopback-ctl add -n Matting /dev/video9
+sudo v4l2loopback-ctl add -n Matting /dev/video9
 ```
 
 ### Run
@@ -180,7 +180,7 @@ Press Ctrl-C to stop; it shuts the virtual camera down cleanly.
 
 ```sh
 # bash
-matting completions bash | pkexec tee /etc/bash_completion.d/matting > /dev/null
+matting completions bash | sudo tee /etc/bash_completion.d/matting > /dev/null
 
 # zsh  (ensure ~/.zfunc is on your fpath before compinit)
 mkdir -p ~/.zfunc && matting completions zsh > ~/.zfunc/_matting

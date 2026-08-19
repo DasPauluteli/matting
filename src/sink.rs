@@ -37,7 +37,7 @@ impl V4lSink {
         let dev = Device::with_path(path).with_context(|| {
             format!(
                 "opening {path}. If it does not exist, create one with:\n  \
-                 pkexec modprobe v4l2loopback devices=1 video_nr=9 card_label=Matting exclusive_caps=1"
+                 sudo modprobe v4l2loopback devices=1 video_nr=9 card_label=Matting exclusive_caps=1"
             )
         })?;
 
