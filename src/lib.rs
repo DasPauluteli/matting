@@ -5,5 +5,6 @@ pub mod convert;
 pub mod freeze;
 pub mod manifest;
 pub mod model;
+pub mod pipeline;
 pub mod prepare;
 pub mod sink;
