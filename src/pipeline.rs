@@ -136,6 +136,9 @@ pub fn run(args: &RunArgs) -> Result<()> {
     }
 
     let mut failures = 0u32;
+    let mut frames = 0u64;
+    let mut window_start = std::time::Instant::now();
+    let mut infer_total = std::time::Duration::ZERO;
     loop {
         let frame = match source.next_frame() {
             Ok(f) => {
@@ -154,8 +157,23 @@ pub fn run(args: &RunArgs) -> Result<()> {
                 continue;
             }
         };
+        let t0 = std::time::Instant::now();
         let out = pipeline.process(&frame)?;
+        infer_total += t0.elapsed();
         sink.write_frame(out)?;
+
+        // Report throughput once a second: delivered fps, and how much of the
+        // frame budget the model plus compositing actually consume.
+        frames += 1;
+        let elapsed = window_start.elapsed();
+        if elapsed >= std::time::Duration::from_secs(1) {
+            let fps = frames as f64 / elapsed.as_secs_f64();
+            let per_frame_ms = infer_total.as_secs_f64() * 1000.0 / frames as f64;
+            println!("{fps:.1} fps  ({per_frame_ms:.1} ms/frame processing)");
+            frames = 0;
+            infer_total = std::time::Duration::ZERO;
+            window_start = std::time::Instant::now();
+        }
     }
 }
 

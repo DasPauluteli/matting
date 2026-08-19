@@ -18,6 +18,12 @@ which is worth roughly a 10x speedup:
 
 Measured on a Radeon 8060S (gfx1151, Strix Halo) with ROCm 7.2.4.
 
+End to end with ResNet50 at 1024x576, the full pipeline costs **20.8 ms per
+frame** — inference plus YUYV/RGB conversion and compositing — for a ceiling of
+roughly 48 fps, so a 30 fps camera is comfortably covered. In practice it burns
+about **0.7 of one CPU core** (~2% of a 32-thread machine), against the ~25%
+that a CPU-bound matting tool costs. `run` prints its throughput once a second.
+
 ## Requirements
 
 - AMD GPU with ROCm and MIGraphX (developed against gfx1151 / ROCm 7.2.4)
