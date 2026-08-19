@@ -126,27 +126,35 @@ mod tests {
         onnx_protobuf::ModelProto::parse_from_bytes(&bytes).ok()
     }
 
-    const MNV3: &str = concat!(env!("HOME"), "/Downloads/rvm_mobilenetv3_fp32.onnx");
-    const R50: &str = concat!(
-        env!("HOME"),
-        "/.config/obs-studio/plugins/obs-ai-matting/models/rvm_resnet50.onnx"
-    );
+    /// Tests that need a stock RVM export read its path from the environment,
+    /// so they work on any machine and skip cleanly where it is not present.
+    fn model_path(var: &str) -> Option<String> {
+        std::env::var(var).ok()
+    }
+
+    fn mnv3() -> Option<onnx_protobuf::ModelProto> {
+        load(&model_path("MATTING_TEST_RVM_MOBILENETV3")?)
+    }
+
+    fn r50() -> Option<onnx_protobuf::ModelProto> {
+        load(&model_path("MATTING_TEST_RVM_RESNET50")?)
+    }
 
     #[test]
     fn reads_mobilenetv3_channels_from_model() {
-        let Some(m) = load(MNV3) else { return };
+        let Some(m) = mnv3() else { return };
         assert_eq!(read_state_channels(&m).unwrap(), [16, 20, 40, 64]);
     }
 
     #[test]
     fn reads_resnet50_channels_from_model() {
-        let Some(m) = load(R50) else { return };
+        let Some(m) = r50() else { return };
         assert_eq!(read_state_channels(&m).unwrap(), [16, 32, 64, 128]);
     }
 
     #[test]
     fn computes_state_spatial_dims() {
-        let Some(m) = load(MNV3) else { return };
+        let Some(m) = mnv3() else { return };
         let s = state_shapes(&m, 1024, 576, 0.5).unwrap();
         // Downsampled is 512x288; states sit at /2, /4, /8, /16 of that.
         assert_eq!(s.spatial, [(144, 256), (72, 128), (36, 64), (18, 32)]);
@@ -154,7 +162,7 @@ mod tests {
 
     #[test]
     fn frozen_model_has_no_downsample_ratio_input() {
-        let Some(m) = load(MNV3) else { return };
+        let Some(m) = mnv3() else { return };
         let f = freeze_model(m, 1024, 576, 0.5).unwrap();
         let g = f.graph.as_ref().unwrap();
         assert!(
@@ -169,7 +177,7 @@ mod tests {
 
     #[test]
     fn frozen_model_pins_all_input_dims() {
-        let Some(m) = load(MNV3) else { return };
+        let Some(m) = mnv3() else { return };
         let f = freeze_model(m, 1024, 576, 0.5).unwrap();
         let g = f.graph.as_ref().unwrap();
         for input in &g.input {

@@ -1,92 +1,302 @@
 # matting
 
-Realtime webcam background matting on AMD GPUs, using Robust Video Matting
-through ONNX Runtime's MIGraphX execution provider.
+Realtime webcam background removal on AMD GPUs.
+
+Reads your webcam, runs [Robust Video Matting](https://github.com/PeterL1n/RobustVideoMatting)
+on the GPU via ONNX Runtime's MIGraphX execution provider, and publishes the
+result to a virtual camera that any application can use.
+
+Three output modes:
+
+| Mode | Output | Use it in |
+|---|---|---|
+| `alpha` | Transparent background (BGRA) | OBS — no Chroma Key filter needed |
+| `greenscreen` | Solid colour background (YUYV) | Anything |
+| `image` | Photo background (YUYV) | Anything |
 
 ## Why this exists
 
-Stock RVM exports cannot be compiled by MIGraphX: `downsample_ratio` is a
-runtime graph input, which leaves the internal `Resize` operations
-non-constant. Tools that bundle RVM therefore fall back to CPU on AMD
-hardware. `matting prepare` rewrites the graph so the whole thing compiles,
-which is worth roughly a 10x speedup:
+RVM's published ONNX exports take `downsample_ratio` as a *runtime input*. That
+leaves the model's internal `Resize` operations non-constant, and MIGraphX
+refuses to compile such a graph:
 
-| Model @1024x576 | CPU | MIGraphX GPU |
-|---|---|---|
-| RVM MobileNetV3 | 74 ms / 13.5 fps | 7.7 ms / 130 fps |
-| RVM ResNet50 | 104 ms / 9.6 fps | 10.0 ms / 100 fps |
+```
+PARSE_Resize: linear mode not supported for non-constant inputs
+```
 
-Measured on a Radeon 8060S (gfx1151, Strix Halo) with ROCm 7.2.4.
+When that happens inside ONNX Runtime, the MIGraphX provider rejects the graph
+and execution silently falls back to the CPU — you get a working but slow
+result, with no error explaining why.
 
-End to end with ResNet50 at 1024x576, the full pipeline costs **20.8 ms per
-frame** — inference plus YUYV/RGB conversion and compositing — for a ceiling of
-roughly 48 fps, so a 30 fps camera is comfortably covered. In practice it burns
-about **0.7 of one CPU core** (~2% of a 32-thread machine), against the ~25%
-that a CPU-bound matting tool costs. `run` prints its throughput once a second.
+`matting prepare` rewrites the graph before compiling it: `downsample_ratio`
+becomes a constant, and every input shape is pinned. The whole model then
+compiles and runs on the GPU.
 
 ## Requirements
 
-- AMD GPU with ROCm and MIGraphX (developed against gfx1151 / ROCm 7.2.4)
-- `onnxruntime` built with the MIGraphX execution provider at
-  `/usr/lib/libonnxruntime.so`
-- `v4l2loopback`
-- A stock RVM ONNX export from
-  <https://github.com/PeterL1n/RobustVideoMatting/releases>
+- **Linux** with `v4l2loopback`
+- **An AMD GPU supported by ROCm** (see below)
+- **ROCm** with **MIGraphX**
+- **ONNX Runtime built with the MIGraphX execution provider**
+- **Rust** 1.75 or newer
+- An RVM ONNX export (see [Getting a model](#getting-a-model))
+
+### Supported GPUs
+
+This needs a GPU that ROCm supports, since everything runs through MIGraphX.
+
+**Tested:** Radeon 8060S (`gfx1151`, Strix Halo) on ROCm 7.2.4.
+
+**Expected to work** — these are the architectures the ROCm libraries on a
+current install ship kernels for. None of them have been tested here, so treat
+this as a starting point rather than a guarantee:
+
+| Architecture | gfx targets | Examples |
+|---|---|---|
+| RDNA 2 | `gfx1030`–`gfx1036` | RX 6800/6900 XT, RX 6700 XT, Radeon PRO W6800 |
+| RDNA 3 | `gfx1100`–`gfx1103` | RX 7900 XTX/XT, RX 7800 XT, RX 7600, PRO W7900 |
+| RDNA 3.5 | `gfx1150`–`gfx1153` | Radeon 890M, Radeon 8050S/8060S (Strix, Strix Halo) |
+| RDNA 4 | `gfx1200`, `gfx1201` | RX 9070 XT, RX 9060 |
+| CDNA | `gfx908`, `gfx90a`, `gfx942`, `gfx950` | MI100, MI210/250, MI300, MI350 |
+
+Check what you have:
+
+```sh
+rocminfo | grep -m1 'Name:.*gfx'
+```
+
+If your GPU is not supported by ROCm, this will not work — there is no CPU
+fallback path, by design.
+
+## Installing
+
+### 1. System dependencies
+
+You need ROCm, MIGraphX, and an ONNX Runtime built with the MIGraphX provider.
+Package names differ by distribution.
+
+**Arch / CachyOS:**
+
+```sh
+pkexec pacman -S rocm-hip-sdk migraphx v4l2loopback-dkms v4l-utils rust
+# ONNX Runtime with the MIGraphX provider, from the AUR:
+paru -S onnxruntime-opt-rocm
+```
+
+**Other distributions:** install ROCm following
+[AMD's instructions](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/),
+then either install a prebuilt ONNX Runtime with MIGraphX or
+[build one](https://onnxruntime.ai/docs/execution-providers/MIGraphX-ExecutionProvider.html).
+
+Verify the provider is present:
+
+```sh
+ls /usr/lib/libonnxruntime_providers_migraphx.so
+```
+
+### 2. Build
+
+```sh
+git clone <this-repo> && cd matting
+cargo build --release
+```
+
+The binary lands at `target/release/matting`.
+
+`.cargo/config.toml` points the build at `/usr/lib/libonnxruntime.so`. If your
+ONNX Runtime is somewhere else, edit that file or set `ORT_DYLIB_PATH`.
+
+### 3. Getting a model
+
+Download a stock export from the
+[RVM releases page](https://github.com/PeterL1n/RobustVideoMatting/releases):
+
+- `rvm_resnet50_fp32.onnx` — better quality, the default
+- `rvm_mobilenetv3_fp32.onnx` — faster, lighter
+
+Models are not redistributed here; RVM has its own licence.
 
 ## Usage
 
-Prepare once. This freezes the graph and compiles it, taking a few minutes:
+### Prepare the model (once)
 
 ```sh
 matting prepare --from rvm_resnet50.onnx --model resnet50
 ```
 
-The result is cached in `~/.cache/matting`, so later runs start in about a
-second. `prepare` reads the backbone's recurrent-state widths out of the model
-and refuses a mismatched `--model`.
+This rewrites the graph and compiles it for your GPU. **The first run takes
+several minutes.** The result is cached in `~/.cache/matting` and reused, so
+later startups take a second or two.
 
-Create an output device. If `v4l2loopback` is already loaded for another
-device, add one dynamically rather than reloading the module:
+Match `--width`/`--height` to your webcam:
 
 ```sh
-pkexec v4l2loopback-ctl add -n Matting /dev/video9
+matting prepare --from rvm_resnet50.onnx --width 1280 --height 720
 ```
 
-Otherwise load the module directly:
+Re-run `prepare` whenever you change resolution, ratio, or model, or after a
+ROCm upgrade. `run` checks a manifest and tells you when the cache is stale
+rather than quietly misbehaving.
+
+### Create a virtual camera
+
+If `v4l2loopback` is not loaded yet:
 
 ```sh
 pkexec modprobe v4l2loopback devices=1 video_nr=9 card_label=Matting exclusive_caps=1
 ```
 
-Then run:
+If it is already loaded for something else, add a device instead of reloading
+the module — reloading would disconnect whatever is using it:
 
 ```sh
-matting run --mode alpha                          # transparent, OBS only
-matting run --mode greenscreen --color '#00FF00'  # works everywhere
-matting run --mode image --image bg.jpg --fit cover
+pkexec v4l2loopback-ctl add -n Matting /dev/video9
 ```
 
-`--mode alpha` emits BGRA and is only rendered correctly by OBS, where it
-removes the need for a Chroma Key filter. Use `greenscreen` or `image` for
-browsers, Zoom and Discord, which only accept YUYV.
+### Run
 
-`--fit` controls how a background image is mapped onto the capture resolution:
-`cover` (default, scale to fill and centre-crop), `stretch`, or `contain`.
+```sh
+# Transparent background, for OBS
+matting run
+
+# Green screen, works everywhere
+matting run --mode greenscreen
+
+# Custom key colour
+matting run --mode greenscreen --color '#0000FF'
+matting run --mode greenscreen --color 0,0,255
+
+# Photo background
+matting run --mode image --image office.jpg
+matting run --mode image --image office.jpg --fit contain
+```
+
+Point your application at the virtual camera (`Matting` / `/dev/video9`).
+
+`run` prints its throughput once a second so you can see what you are getting.
+
+### Shell completions
+
+```sh
+# bash
+matting completions bash | pkexec tee /etc/bash_completion.d/matting > /dev/null
+
+# zsh  (ensure ~/.zfunc is on your fpath before compinit)
+mkdir -p ~/.zfunc && matting completions zsh > ~/.zfunc/_matting
+
+# fish
+mkdir -p ~/.config/fish/completions
+matting completions fish > ~/.config/fish/completions/matting.fish
+```
+
+Restart your shell afterwards.
+
+### Choosing a mode
+
+`alpha` is the default and gives the best result **in OBS**, where real
+transparency means you can drop the Chroma Key filter entirely.
+
+Browsers, Zoom, Discord and most other applications cannot accept an alpha
+video stream — they only take YUYV. Use `greenscreen` or `image` for those.
+`run` warns you when you pick `alpha`.
+
+### Fitting a background image
+
+`--fit` controls how your image is mapped onto the webcam resolution:
+
+- `cover` (default) — scale to fill, cropping the overflow. No distortion.
+- `contain` — scale to fit, adding black bars. No distortion, no cropping.
+- `stretch` — scale to exactly fill. Distorts if aspect ratios differ.
+
+## Performance
+
+Measured on a Radeon 8060S (`gfx1151`, Ryzen AI MAX+ 395) at 1024×576, ROCm
+7.2.4. Your numbers will differ:
+
+| | ResNet50 | MobileNetV3 |
+|---|---|---|
+| Model inference, GPU | 10.0 ms | 7.7 ms |
+| Model inference, CPU | 104 ms | 74 ms |
+
+End to end — inference plus colour conversion and compositing — the pipeline
+costs about **21 ms per frame**, giving headroom for roughly 45 fps at
+1024×576. In that state it used a little under one CPU core.
+
+If you need more speed: use `--model mobilenetv3`, or lower `--ratio` (0.25
+instead of 0.5) when preparing, which shrinks the resolution the model works at.
+
+## Troubleshooting
+
+**`no prepared model at ...; run 'matting prepare' first`**
+You have not run `prepare`, or `~/.cache/matting` was cleared.
+
+**`prepared model is stale, re-run 'matting prepare'`**
+Something changed — resolution, ratio, model, GPU, or ROCm version. The message
+names the field. Re-run `prepare`.
+
+**`--model X expects state channels [...] but this model declares [...]`**
+`--model` does not match the file in `--from`. The two RVM backbones have
+different internal widths; pass the one that matches your download.
+
+**`/dev/videoN would not accept YUYV WxH`**
+Your webcam does not offer that format or size. See what it does support:
+
+```sh
+v4l2-ctl -d /dev/video0 --list-formats-ext
+```
+
+Then run `prepare` again with matching `--width`/`--height`.
+
+**`opening /dev/video9 ... No such file or directory`**
+The virtual camera does not exist yet. See
+[Create a virtual camera](#create-a-virtual-camera).
+
+**Output looks right but is slow**
+Confirm ONNX Runtime actually has the MIGraphX provider
+(`ls /usr/lib/libonnxruntime_providers_migraphx.so`) and that `rocminfo` reports
+your GPU. Without them there is no GPU path.
+
+**The image is transparent/black in a browser or Zoom**
+You are in `alpha` mode. Those applications cannot display alpha — use
+`--mode greenscreen` or `--mode image`.
+
+## How it works
+
+```
+webcam (YUYV)
+  → convert    YUYV 4:2:2 → planar RGB, normalized
+  → model      RVM on the GPU; recurrent state carried between frames
+  → composite  alpha, colour key, or image blend
+  → v4l2loopback
+```
+
+The pipeline is single-threaded: at ~21 ms per frame against a 33 ms budget at
+30 fps, there is nothing for extra threads to win.
+
+RVM is *recurrent* — it remembers previous frames — which is why edges stay
+stable instead of flickering the way per-frame image segmentation models do.
+That state is carried forward on the GPU without copying it back to the host.
 
 ## Development
-
-Tests need `ORT_DYLIB_PATH`, which `.cargo/config.toml` sets automatically:
 
 ```sh
 cargo test --release -- --test-threads=1
 ```
 
 Single-threaded because several tests build MIGraphX sessions against the same
-compile cache. Tests that need a prepared model or a stock RVM export skip
-themselves when those files are absent.
+compile cache.
+
+Tests that need real model files read their paths from the environment and skip
+when unset:
+
+```sh
+export MATTING_TEST_RVM_RESNET50=/path/to/rvm_resnet50.onnx
+export MATTING_TEST_RVM_MOBILENETV3=/path/to/rvm_mobilenetv3_fp32.onnx
+```
 
 The most important test is
-`model::tests::frozen_model_matches_original_within_tolerance`, which runs the
-unmodified RVM export on CPU and compares its alpha against the frozen graph on
-GPU. If graph surgery ever corrupts the model, that test is what catches it —
+`model::tests::frozen_model_matches_original_within_tolerance`. It runs the
+unmodified RVM export on CPU and compares its alpha output against the rewritten
+graph on GPU. Graph surgery can corrupt a model in ways that still produce
+plausible-looking output, and this test is the only thing that would catch it —
 do not loosen its tolerance to make it pass.

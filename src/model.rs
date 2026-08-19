@@ -125,10 +125,13 @@ impl Matting {
 mod tests {
     use super::*;
 
-    const R50_SOURCE: &str = concat!(
-        env!("HOME"),
-        "/.config/obs-studio/plugins/obs-ai-matting/models/rvm_resnet50.onnx"
-    );
+    /// Path to a stock ResNet50 RVM export, supplied by the environment so the
+    /// suite is not tied to one machine's layout.
+    fn r50_source() -> Option<String> {
+        std::env::var("MATTING_TEST_RVM_RESNET50")
+            .ok()
+            .filter(|p| std::path::Path::new(p).exists())
+    }
 
     fn deterministic_frame(width: usize, height: usize) -> Vec<f32> {
         let plane = width * height;
@@ -187,7 +190,11 @@ mod tests {
     #[test]
     fn frozen_model_matches_original_within_tolerance() {
         let frozen = crate::prepare::frozen_model_path(&crate::prepare::cache_dir());
-        if !frozen.exists() || !std::path::Path::new(R50_SOURCE).exists() {
+        let Some(source) = r50_source() else {
+            eprintln!("skipping: set MATTING_TEST_RVM_RESNET50 to a stock RVM export");
+            return;
+        };
+        if !frozen.exists() {
             eprintln!("skipping: run `matting prepare` first");
             return;
         }
@@ -200,7 +207,7 @@ mod tests {
         let (_, frozen_pha) = frozen_model.infer(&frame).unwrap();
         let frozen_pha = frozen_pha.to_vec();
 
-        let reference = reference_pha(R50_SOURCE, &frame, w, h, 0.5);
+        let reference = reference_pha(&source, &frame, w, h, 0.5);
 
         assert_eq!(frozen_pha.len(), reference.len());
         let mut worst = 0f32;
