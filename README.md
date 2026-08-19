@@ -38,8 +38,8 @@ compiles and runs on the GPU.
 - **An AMD GPU supported by ROCm** (see below)
 - **ROCm** with **MIGraphX**
 - **ONNX Runtime built with the MIGraphX execution provider**
-- **Rust** 1.75 or newer
-- An RVM ONNX export (see [Getting a model](#getting-a-model))
+- **Rust** — built and tested with 1.97; older toolchains are untested
+- An RVM ONNX export (see [Getting a model](#3-getting-a-model))
 
 ### Supported GPUs
 
@@ -97,7 +97,7 @@ ls /usr/lib/libonnxruntime_providers_migraphx.so
 ### 2. Build
 
 ```sh
-git clone <this-repo> && cd matting
+git clone https://github.com/DasPauluteli/matting.git && cd matting
 cargo build --release
 ```
 
@@ -297,6 +297,19 @@ your GPU. Without them there is no GPU path.
 **The image is transparent/black in a browser or Zoom**
 You are in `alpha` mode. Those applications cannot display alpha — use
 `--mode greenscreen` or `--mode image`.
+
+**The key colour is slightly wrong (`#00FF00` shows up as `#00CB08`)**
+The YCbCr matrix does not match what your application assumes. See
+[Colour accuracy](#colour-accuracy) and try the other `--colorimetry` value.
+Background images shift the same way.
+
+**Smeared or ghostly content in the transparent areas**
+Your compositor wants the opposite alpha convention. See
+[Alpha mode and premultiplication](#alpha-mode-and-premultiplication).
+
+**`/dev/videoN would not accept ...` when switching modes**
+Something still has the virtual camera open, and it keeps its pixel format while
+a consumer is attached. Close it (`fuser -v /dev/video9` shows what) and retry.
 
 ## How it works
 
