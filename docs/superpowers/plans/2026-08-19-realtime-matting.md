@@ -1769,7 +1769,7 @@ impl V4lSink {
         let dev = Device::with_path(path).with_context(|| {
             format!(
                 "opening {path}. If it does not exist, create one with:\n  \
-                 sudo modprobe v4l2loopback devices=1 video_nr=9 card_label=Matting exclusive_caps=1"
+                 pkexec modprobe v4l2loopback devices=1 video_nr=9 card_label=Matting exclusive_caps=1"
             )
         })?;
 
@@ -2101,7 +2101,7 @@ Expected: all tests pass.
 - [ ] **Step 6: Verify end to end against real devices**
 
 ```bash
-sudo modprobe v4l2loopback devices=1 video_nr=9 card_label=Matting exclusive_caps=1
+pkexec modprobe v4l2loopback devices=1 video_nr=9 card_label=Matting exclusive_caps=1
 cargo run --release -- run --mode greenscreen --output /dev/video9
 ```
 Expected: prints the streaming banner and runs without error. In another terminal confirm the device carries frames:
@@ -2153,7 +2153,7 @@ matting prepare --from rvm_resnet50.onnx --model resnet50
 Create an output device:
 
 ```sh
-sudo modprobe v4l2loopback devices=1 video_nr=9 card_label=Matting exclusive_caps=1
+pkexec modprobe v4l2loopback devices=1 video_nr=9 card_label=Matting exclusive_caps=1
 ```
 
 Then run:

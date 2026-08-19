@@ -1,0 +1,23 @@
+[package]
+name = "matting"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4.6.9"
+image = "0.25"
+onnx-protobuf = "0.2.3"
+# onnx-protobuf 0.2.3's generated code asserts protobuf::VERSION_3_4_0, so the
+# minor version must be pinned exactly or it fails to compile.
+protobuf = "=3.4.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+v4l = "0.14"
+
+[dependencies.ort]
+version = "2.0.0-rc.13"
+default-features = false
+features = ["load-dynamic", "migraphx", "ndarray", "half"]

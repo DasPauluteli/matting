@@ -1,0 +1,2 @@
+[env]
+ORT_DYLIB_PATH = "/usr/lib/libonnxruntime.so"
