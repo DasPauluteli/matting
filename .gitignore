@@ -9,3 +9,6 @@
 
 # Throwaway venv from the spike phase.
 /.venv-tools/
+
+# Local model files.
+/models/

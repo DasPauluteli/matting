@@ -1,8 +1,0 @@
-[package]
-name = "bench-spike"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-half = "2.7.1"
-ort = { version = "2.0.0-rc.13", default-features = false, features = ["half", "load-dynamic", "migraphx", "ndarray"] }
