@@ -57,6 +57,29 @@ pub enum Fit {
     Contain,
 }
 
+/// Which YCbCr convention to use when encoding YUYV.
+///
+/// V4L2 has no reliable way to signal this, so it must match whatever the
+/// consuming application assumes. OBS assumes BT.709 full range.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Colorimetry {
+    /// What most webcams produce and what the V4L2 device declares.
+    Bt601Limited,
+    Bt601Full,
+    Bt709Limited,
+    /// What OBS assumes when reading a v4l2loopback device.
+    Bt709Full,
+}
+
+/// How the alpha channel relates to the colour channels.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlphaMode {
+    /// Colour already multiplied by alpha. What OBS expects.
+    Premultiplied,
+    /// Colour independent of alpha.
+    Straight,
+}
+
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backbone {
     Resnet50,
@@ -160,6 +183,12 @@ pub struct RunArgs {
     /// Which prepared backbone to load. Must match what `prepare` built.
     #[arg(long, value_enum, default_value_t = Backbone::Resnet50, help_heading = "Output")]
     pub model: Backbone,
+    /// YCbCr convention for YUYV output. Must match what the consumer assumes.
+    #[arg(long, value_enum, default_value_t = Colorimetry::Bt709Full, help_heading = "Output")]
+    pub colorimetry: Colorimetry,
+    /// Whether alpha-mode colour is premultiplied by alpha.
+    #[arg(long, value_enum, default_value_t = AlphaMode::Premultiplied, help_heading = "Output")]
+    pub alpha_mode: AlphaMode,
 
     /// Key colour as #RRGGBB or r,g,b.
     #[arg(

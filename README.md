@@ -174,6 +174,7 @@ matting run --mode image --image office.jpg --fit contain
 Point your application at the virtual camera (`Matting` / `/dev/video9`).
 
 `run` prints its throughput once a second so you can see what you are getting.
+Press Ctrl-C to stop; it shuts the virtual camera down cleanly.
 
 ### Shell completions
 
@@ -199,6 +200,39 @@ transparency means you can drop the Chroma Key filter entirely.
 Browsers, Zoom, Discord and most other applications cannot accept an alpha
 video stream — they only take YUYV. Use `greenscreen` or `image` for those.
 `run` warns you when you pick `alpha`.
+
+### Colour accuracy
+
+V4L2 has no reliable way to tell a consumer which YCbCr matrix a stream uses.
+The virtual camera declares BT.601 limited range; OBS decodes it as **BT.709
+full range** regardless. So the matrix has to match whatever your consumer
+assumes, and `--colorimetry` selects it:
+
+```sh
+matting run --mode greenscreen --colorimetry bt709-full     # default, correct in OBS
+matting run --mode greenscreen --colorimetry bt601-limited  # if colours look off elsewhere
+```
+
+Camera pixels are unaffected by a mismatch — they are decoded and re-encoded
+with the same matrix, so they reach the consumer unchanged. Only colours this
+program *introduces* shift: the greenscreen key and background images. With the
+wrong setting, a `#00FF00` key arrives as `#00CB08`.
+
+If your key colour looks slightly off, try the other setting.
+
+### Alpha mode and premultiplication
+
+RVM's foreground prediction is only meaningful where alpha is non-zero; in the
+background it contains a smeared inpainting of the scene. Compositors that treat
+BGRA as *premultiplied* — OBS does — would draw that over your background.
+
+By default the output is premultiplied, which forces transparent pixels to black
+and looks correct in OBS. If your compositor expects straight alpha and edges
+look too dark:
+
+```sh
+matting run --mode alpha --alpha-mode straight
+```
 
 ### Fitting a background image
 

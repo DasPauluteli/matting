@@ -10,13 +10,21 @@ fn to_u8(v: f32) -> u8 {
 
 /// Planar float foreground + alpha -> interleaved BGRA8, preserving alpha.
 /// This is the only mode that carries true transparency.
-pub fn to_bgra(fgr: &[f32], pha: &[f32], plane: usize, out: &mut [u8]) {
+///
+/// RVM's foreground prediction is only meaningful where alpha is non-zero; in
+/// the background it holds a smeared inpainting of the scene. A compositor that
+/// treats the stream as premultiplied (OBS does) would draw that garbage over
+/// the background, so premultiplying is the default: it forces transparent
+/// pixels to black and makes the output well-defined either way.
+pub fn to_bgra(fgr: &[f32], pha: &[f32], plane: usize, premultiplied: bool, out: &mut [u8]) {
     debug_assert_eq!(out.len(), plane * 4);
     for i in 0..plane {
-        out[i * 4] = to_u8(fgr[2 * plane + i]);
-        out[i * 4 + 1] = to_u8(fgr[plane + i]);
-        out[i * 4 + 2] = to_u8(fgr[i]);
-        out[i * 4 + 3] = to_u8(pha[i]);
+        let a = pha[i];
+        let scale = if premultiplied { a } else { 1.0 };
+        out[i * 4] = to_u8(fgr[2 * plane + i] * scale);
+        out[i * 4 + 1] = to_u8(fgr[plane + i] * scale);
+        out[i * 4 + 2] = to_u8(fgr[i] * scale);
+        out[i * 4 + 3] = to_u8(a);
     }
 }
 
@@ -110,11 +118,35 @@ mod tests {
     fn alpha_mode_writes_bgra_with_alpha() {
         let (fgr, plane) = red_fg();
         let mut out = vec![0u8; 4];
-        to_bgra(&fgr, &[1.0], plane, &mut out);
+        to_bgra(&fgr, &[1.0], plane, false, &mut out);
         assert_eq!(out, vec![0, 0, 255, 255], "expected B,G,R,A");
 
-        to_bgra(&fgr, &[0.0], plane, &mut out);
+        to_bgra(&fgr, &[0.0], plane, false, &mut out);
         assert_eq!(out[3], 0, "transparent pixel must have alpha 0");
+    }
+
+    /// RVM leaves garbage in `fgr` where alpha is zero. Premultiplying must
+    /// force those pixels to black so a premultiplied compositor (OBS) does not
+    /// draw the garbage over the background.
+    #[test]
+    fn premultiplying_blacks_out_transparent_garbage() {
+        let garbage = vec![0.9f32, 0.4, 0.7];
+        let mut out = vec![0u8; 4];
+        to_bgra(&garbage, &[0.0], 1, true, &mut out);
+        assert_eq!(out, vec![0, 0, 0, 0], "transparent pixels must be fully black");
+
+        // Straight alpha keeps the garbage, which is what OBS was showing.
+        to_bgra(&garbage, &[0.0], 1, false, &mut out);
+        assert_ne!(&out[..3], &[0, 0, 0], "straight alpha should preserve colour");
+    }
+
+    #[test]
+    fn premultiplying_scales_partial_alpha() {
+        let fgr = vec![1.0f32, 1.0, 1.0];
+        let mut out = vec![0u8; 4];
+        to_bgra(&fgr, &[0.5], 1, true, &mut out);
+        assert!((out[0] as i32 - 128).abs() <= 1, "b={}", out[0]);
+        assert_eq!(out[3], 128, "alpha itself must not be scaled");
     }
 
     #[test]

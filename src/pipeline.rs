@@ -4,9 +4,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::capture::{Source, V4lSource};
-use crate::cli::{Mode, RunArgs};
+use crate::cli::{AlphaMode, Mode, RunArgs};
 use crate::composite::{over_color, over_image, to_bgra, Background};
-use crate::convert::{rgb_to_yuyv, yuyv_to_rgb_f32_nchw};
+use crate::convert::{rgb_to_yuyv, yuyv_to_rgb_f32_nchw, Matrix};
 use crate::manifest::Manifest;
 use crate::model::Matting;
 use crate::prepare;
@@ -19,46 +19,54 @@ pub struct Pipeline {
     background: Option<Background>,
     width: usize,
     height: usize,
+    matrix: Matrix,
+    premultiplied: bool,
     rgb_in: Vec<f32>,
     rgb_out: Vec<u8>,
     out: Vec<u8>,
 }
 
+/// Everything the pipeline needs besides the model itself.
+pub struct Config {
+    pub mode: Mode,
+    pub colour: [u8; 3],
+    pub background: Option<Background>,
+    pub width: u32,
+    pub height: u32,
+    pub matrix: Matrix,
+    pub premultiplied: bool,
+}
+
 impl Pipeline {
-    pub fn new(
-        model: Matting,
-        mode: Mode,
-        colour: [u8; 3],
-        background: Option<Background>,
-        width: u32,
-        height: u32,
-    ) -> Pipeline {
-        let (w, h) = (width as usize, height as usize);
+    pub fn new(model: Matting, config: Config) -> Pipeline {
+        let (w, h) = (config.width as usize, config.height as usize);
         let plane = w * h;
         Pipeline {
             model,
-            mode,
-            colour,
-            background,
+            mode: config.mode,
+            colour: config.colour,
+            background: config.background,
             width: w,
             height: h,
+            matrix: config.matrix,
+            premultiplied: config.premultiplied,
             rgb_in: vec![0.0; plane * 3],
             rgb_out: vec![0; plane * 3],
-            out: vec![0; plane * bytes_per_pixel(mode)],
+            out: vec![0; plane * bytes_per_pixel(config.mode)],
         }
     }
 
     /// YUYV in, mode-appropriate bytes out.
     pub fn process(&mut self, yuyv: &[u8]) -> Result<&[u8]> {
         let plane = self.width * self.height;
-        yuyv_to_rgb_f32_nchw(yuyv, self.width, self.height, &mut self.rgb_in);
+        yuyv_to_rgb_f32_nchw(yuyv, self.width, self.height, self.matrix, &mut self.rgb_in);
         let (fgr, pha) = self.model.infer(&self.rgb_in)?;
 
         match self.mode {
-            Mode::Alpha => to_bgra(fgr, pha, plane, &mut self.out),
+            Mode::Alpha => to_bgra(fgr, pha, plane, self.premultiplied, &mut self.out),
             Mode::Greenscreen => {
                 over_color(fgr, pha, plane, self.colour, &mut self.rgb_out);
-                rgb_to_yuyv(&self.rgb_out, self.width, self.height, &mut self.out);
+                rgb_to_yuyv(&self.rgb_out, self.width, self.height, self.matrix, &mut self.out);
             }
             Mode::Image => {
                 let bg = self
@@ -66,7 +74,7 @@ impl Pipeline {
                     .as_ref()
                     .context("image mode without a background")?;
                 over_image(fgr, pha, plane, bg.rgb(), &mut self.rgb_out);
-                rgb_to_yuyv(&self.rgb_out, self.width, self.height, &mut self.out);
+                rgb_to_yuyv(&self.rgb_out, self.width, self.height, self.matrix, &mut self.out);
             }
         }
         Ok(&self.out)
@@ -118,7 +126,18 @@ pub fn run(args: &RunArgs) -> Result<()> {
 
     let mut source = V4lSource::open(&args.input, width, height)?;
     let mut sink = V4lSink::open(&args.output, width, height, args.mode)?;
-    let mut pipeline = Pipeline::new(model, args.mode, colour, background, width, height);
+    let mut pipeline = Pipeline::new(
+        model,
+        Config {
+            mode: args.mode,
+            colour,
+            background,
+            width,
+            height,
+            matrix: Matrix::from_cli(args.colorimetry),
+            premultiplied: args.alpha_mode == AlphaMode::Premultiplied,
+        },
+    );
 
     println!(
         "Streaming {}x{} {:?} from {} to {} as {}",
@@ -141,11 +160,20 @@ pub fn run(args: &RunArgs) -> Result<()> {
     let interactive = std::io::stdout().is_terminal();
     let mut status_drawn = false;
 
+    // Ctrl-C sets this rather than killing the process outright, so the status
+    // line is closed off and the V4L2 streams are torn down cleanly.
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    {
+        let running = running.clone();
+        ctrlc::set_handler(move || running.store(false, std::sync::atomic::Ordering::SeqCst))
+            .context("installing the Ctrl-C handler")?;
+    }
+
     let mut failures = 0u32;
     let mut frames = 0u64;
     let mut window_start = std::time::Instant::now();
     let mut infer_total = std::time::Duration::ZERO;
-    loop {
+    while running.load(std::sync::atomic::Ordering::SeqCst) {
         // Borrowed, not copied: `source` and `pipeline` are separate bindings,
         // so the frame can be handed straight through.
         let frame = match source.next_frame() {
@@ -209,6 +237,12 @@ pub fn run(args: &RunArgs) -> Result<()> {
             window_start = std::time::Instant::now();
         }
     }
+
+    if status_drawn {
+        println!();
+    }
+    println!("Stopped.");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -235,7 +269,18 @@ mod tests {
         let frame = vec![128u8; (w * h * 2) as usize];
         let mut source = TestSource::new(w, h, vec![frame]);
         let mut sink = TestSink::new();
-        let mut pipe = Pipeline::new(model, Mode::Greenscreen, [0, 255, 0], None, w, h);
+        let mut pipe = Pipeline::new(
+            model,
+            Config {
+                mode: Mode::Greenscreen,
+                colour: [0, 255, 0],
+                background: None,
+                width: w,
+                height: h,
+                matrix: Matrix::BT709_FULL,
+                premultiplied: true,
+            },
+        );
 
         let input = source.next_frame().unwrap().to_vec();
         let out = pipe.process(&input).unwrap();
@@ -250,7 +295,18 @@ mod tests {
         let Some(model) = prepared_model() else { return };
         let (w, h) = (1024u32, 576u32);
         let frame = vec![128u8; (w * h * 2) as usize];
-        let mut pipe = Pipeline::new(model, Mode::Alpha, [0, 255, 0], None, w, h);
+        let mut pipe = Pipeline::new(
+            model,
+            Config {
+                mode: Mode::Alpha,
+                colour: [0, 255, 0],
+                background: None,
+                width: w,
+                height: h,
+                matrix: Matrix::BT709_FULL,
+                premultiplied: true,
+            },
+        );
         let out = pipe.process(&frame).unwrap();
         assert_eq!(out.len(), (w * h * 4) as usize);
     }
