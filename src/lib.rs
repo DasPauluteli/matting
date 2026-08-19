@@ -6,3 +6,4 @@ pub mod freeze;
 pub mod manifest;
 pub mod model;
 pub mod prepare;
+pub mod sink;
