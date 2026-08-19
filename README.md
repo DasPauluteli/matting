@@ -337,6 +337,33 @@ Also relied on:
 | [rust-protobuf](https://github.com/stepancheg/rust-protobuf) | Protobuf runtime | MIT |
 | [anyhow](https://github.com/dtolnay/anyhow), [serde](https://github.com/serde-rs/serde), [sha2](https://github.com/RustCrypto/hashes) | Errors, serialisation, hashing | MIT OR Apache-2.0 |
 
+## A note on how this was built
+
+This project was written with substantial AI assistance — [Claude
+Code](https://claude.com/claude-code) (Claude Opus 5) produced most of the
+design, implementation, tests and documentation, working under human direction
+and review.
+
+That is worth stating plainly so you can calibrate your trust accordingly.
+Some specifics:
+
+- The core finding — that MIGraphX rejects RVM because `downsample_ratio` is a
+  runtime input — was established by benchmarking on real hardware, not
+  inferred. The measurements in [Performance](#performance) are from actual
+  runs on one machine, and all three output modes were verified against a real
+  webcam and virtual camera.
+- The riskiest part of this project is the graph rewriting, because a corrupted
+  model can still produce plausible-looking output. That is exactly what
+  `frozen_model_matches_original_within_tolerance` exists to catch: it compares
+  the rewritten graph against the untouched original. It is worth reading before
+  trusting anything else here.
+- It has been tested on exactly one GPU. The
+  [supported GPU list](#supported-gpus) is derived from what ROCm ships kernels
+  for, not from testing.
+
+Bug reports are welcome, and reviewing the code before relying on it is
+encouraged.
+
 ## Licence
 
 Released under the **GNU General Public License v3.0 or later**. See

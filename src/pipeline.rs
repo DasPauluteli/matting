@@ -1,3 +1,4 @@
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -135,6 +136,11 @@ pub fn run(args: &RunArgs) -> Result<()> {
         );
     }
 
+    // Redraw the throughput line in place on a terminal, but emit plain lines
+    // when redirected so logs stay readable.
+    let interactive = std::io::stdout().is_terminal();
+    let mut status_drawn = false;
+
     let mut failures = 0u32;
     let mut frames = 0u64;
     let mut window_start = std::time::Instant::now();
@@ -146,6 +152,10 @@ pub fn run(args: &RunArgs) -> Result<()> {
                 f.to_vec()
             }
             Err(e) => {
+                // Don't let a message land on top of the in-place status line.
+                if std::mem::take(&mut status_drawn) {
+                    println!();
+                }
                 failures += 1;
                 if failures > 50 {
                     return Err(e).context("capture failed repeatedly; giving up");
@@ -158,9 +168,23 @@ pub fn run(args: &RunArgs) -> Result<()> {
             }
         };
         let t0 = std::time::Instant::now();
-        let out = pipeline.process(&frame)?;
+        let out = match pipeline.process(&frame) {
+            Ok(out) => out,
+            Err(e) => {
+                // Leave the cursor on a clean line before the error surfaces.
+                if status_drawn {
+                    println!();
+                }
+                return Err(e);
+            }
+        };
         infer_total += t0.elapsed();
-        sink.write_frame(out)?;
+        if let Err(e) = sink.write_frame(out) {
+            if status_drawn {
+                println!();
+            }
+            return Err(e);
+        }
 
         // Report throughput once a second: delivered fps, and how much of the
         // frame budget the model plus compositing actually consume.
@@ -169,7 +193,15 @@ pub fn run(args: &RunArgs) -> Result<()> {
         if elapsed >= std::time::Duration::from_secs(1) {
             let fps = frames as f64 / elapsed.as_secs_f64();
             let per_frame_ms = infer_total.as_secs_f64() * 1000.0 / frames as f64;
-            println!("{fps:.1} fps  ({per_frame_ms:.1} ms/frame processing)");
+            let line = format!("{fps:.1} fps  ({per_frame_ms:.1} ms/frame processing)");
+            if interactive {
+                // \x1b[K clears any leftover from a previously longer line.
+                print!("\r{line}\x1b[K");
+                let _ = std::io::stdout().flush();
+                status_drawn = true;
+            } else {
+                println!("{line}");
+            }
             frames = 0;
             infer_total = std::time::Duration::ZERO;
             window_start = std::time::Instant::now();
