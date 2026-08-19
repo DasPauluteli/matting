@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod composite;
 pub mod convert;
 pub mod freeze;
 pub mod manifest;
