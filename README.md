@@ -300,3 +300,48 @@ unmodified RVM export on CPU and compares its alpha output against the rewritten
 graph on GPU. Graph surgery can corrupt a model in ways that still produce
 plausible-looking output, and this test is the only thing that would catch it —
 do not loosen its tolerance to make it pass.
+
+## Credits
+
+This project is a thin pipeline around other people's hard work. The matting
+itself — the part that actually makes this useful — is entirely theirs.
+
+**[Robust Video Matting](https://github.com/PeterL1n/RobustVideoMatting)** by
+Shanchuan Lin, Linjie Yang, Imran Saleemi and Soumyadip Sengupta (University of
+Washington and ByteDance). RVM is the model this is built around: a recurrent
+architecture that carries temporal memory between frames, which is why edges
+stay stable instead of flickering the way per-frame segmentation does. This
+project only reshapes their published ONNX export so an AMD compiler will accept
+it — the network, the training and the quality of the result are entirely their
+contribution.
+
+> Shanchuan Lin, Linjie Yang, Imran Saleemi, Soumyadip Sengupta.
+> *Robust High-Resolution Video Matting with Temporal Guidance.* WACV 2022,
+> pp. 238–247. ([arXiv:2108.11515](https://arxiv.org/abs/2108.11515) ·
+> [project page](https://peterl1n.github.io/RobustVideoMatting/))
+
+RVM is itself GPL-3.0 licensed, which is why this project uses the same licence.
+
+Also relied on:
+
+| Project | Role | Licence |
+|---|---|---|
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | Model execution | MIT |
+| [ROCm](https://github.com/ROCm/ROCm) / [MIGraphX](https://github.com/ROCm/AMDMIGraphX) | AMD GPU compute and graph compiler | MIT |
+| [v4l2loopback](https://github.com/umlaeute/v4l2loopback) | Virtual camera device | GPL-2.0-or-later |
+| [ort](https://github.com/pykeio/ort) | Rust bindings for ONNX Runtime | MIT OR Apache-2.0 |
+| [libv4l-rs](https://github.com/raymanfx/libv4l-rs) (`v4l`) | Rust V4L2 bindings | MIT |
+| [clap](https://github.com/clap-rs/clap) | Argument parsing and completions | MIT OR Apache-2.0 |
+| [image](https://github.com/image-rs/image) | Background image loading and scaling | MIT OR Apache-2.0 |
+| [onnx-protobuf](https://crates.io/crates/onnx-protobuf) | Generated ONNX protobuf types | MPL-2.0 |
+| [rust-protobuf](https://github.com/stepancheg/rust-protobuf) | Protobuf runtime | MIT |
+| [anyhow](https://github.com/dtolnay/anyhow), [serde](https://github.com/serde-rs/serde), [sha2](https://github.com/RustCrypto/hashes) | Errors, serialisation, hashing | MIT OR Apache-2.0 |
+
+## Licence
+
+Released under the **GNU General Public License v3.0 or later**. See
+[LICENSE](LICENSE).
+
+Note that model weights are *not* distributed with this project — you download
+them yourself from the RVM releases page, and they carry
+[their own licence](https://github.com/PeterL1n/RobustVideoMatting/blob/master/LICENSE).

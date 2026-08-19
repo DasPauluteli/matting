@@ -2,6 +2,10 @@
 name = "matting"
 version = "0.1.0"
 edition = "2021"
+description = "Realtime webcam background removal on AMD GPUs using Robust Video Matting"
+license = "GPL-3.0-or-later"
+readme = "README.md"
+repository = "https://github.com/DasPauluteli/matting"
 
 [dependencies]
 anyhow = "1"
