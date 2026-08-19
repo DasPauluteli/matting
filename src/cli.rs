@@ -25,8 +25,29 @@ pub enum Command {
     Prepare(PrepareArgs),
     /// Stream the webcam through the model to a virtual camera.
     Run(RunArgs),
+    /// Capture a background plate for BackgroundMattingV2. Step out of frame first.
+    CapturePlate(CapturePlateArgs),
     /// Print a shell completion script to stdout.
     Completions(CompletionsArgs),
+}
+
+#[derive(Args, Debug)]
+#[command(
+    after_help = "BackgroundMattingV2 works by comparing each frame against a photo of\n\
+        the empty scene. Step out of shot, run this, then keep the camera still —\n\
+        moving it, or a change in lighting, invalidates the plate.\n\n\
+        RVM does not need this."
+)]
+pub struct CapturePlateArgs {
+    /// Webcam to capture from.
+    #[arg(long, default_value = "/dev/video0")]
+    pub input: String,
+    /// Where to write the plate.
+    #[arg(long, default_value = "background.png")]
+    pub output: String,
+    /// Seconds to wait before capturing, to get out of frame.
+    #[arg(long, default_value_t = 5)]
+    pub delay: u32,
 }
 
 #[derive(Args, Debug)]
@@ -197,6 +218,11 @@ pub struct RunArgs {
         help_heading = "Greenscreen mode (--mode greenscreen)"
     )]
     pub color: String,
+
+    /// Background plate, required when the prepared model is
+    /// BackgroundMattingV2. Capture one with `matting capture-plate`.
+    #[arg(long, help_heading = "BackgroundMattingV2")]
+    pub plate: Option<String>,
 
     /// Background image file. Required for image mode.
     #[arg(long, help_heading = "Image mode (--mode image)")]

@@ -8,15 +8,33 @@ use ort::{
     value::{DynValue, Tensor, TensorElementType, TensorRef, ValueType},
 };
 
-/// Holds the ORT session plus RVM's four recurrent state tensors.
+/// Which matting network a prepared model contains.
 ///
-/// State is moved in and out by ownership rather than copied back to host
-/// memory: `SessionOutputs::remove` yields an owned `DynValue` that stays on
-/// the GPU, so the recurrence costs nothing per frame.
+/// Detected from the graph rather than configured: RVM carries recurrent state
+/// inputs (`r1i`..`r4i`), BackgroundMattingV2 takes a second image (`bgr`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arch {
+    /// Robust Video Matting: recurrent, no background plate needed.
+    Rvm,
+    /// BackgroundMattingV2: needs a photo of the empty scene.
+    Bgmv2,
+}
+
+/// Holds the ORT session plus whatever per-frame state the network needs.
+///
+/// For RVM, state is moved in and out by ownership rather than copied back to
+/// host memory: `SessionOutputs::remove` yields an owned `DynValue` that stays
+/// on the GPU, so the recurrence costs nothing per frame.
 pub struct Matting {
     session: Session,
+    arch: Arch,
     state: Option<[DynValue; 4]>,
     state_shapes: [Vec<i64>; 4],
+    /// BackgroundMattingV2's background plate, converted once at startup.
+    plate: Vec<f32>,
+    plate_f16: Vec<f16>,
+    /// Restricts BackgroundMattingV2 to the two outputs we actually consume.
+    bgmv2_outputs: ort::session::RunOptions<ort::session::HasSelectedOutputs>,
     width: u32,
     height: u32,
     /// RVM publishes both fp32 and fp16 ONNX exports. The fp16 ones want
@@ -39,20 +57,28 @@ impl Matting {
             .commit_from_file(frozen)
             .with_context(|| format!("loading {}", frozen.display()))?;
 
-        // The frozen graph pins every state shape; read them back so we can
+        let arch = if session.inputs().iter().any(|i| i.name() == "bgr") {
+            Arch::Bgmv2
+        } else {
+            Arch::Rvm
+        };
+
+        // RVM's frozen graph pins every state shape; read them back so we can
         // build correctly sized zero tensors for the first frame and on reset.
         let mut state_shapes: [Vec<i64>; 4] = Default::default();
-        for (i, slot) in state_shapes.iter_mut().enumerate() {
-            let name = format!("r{}i", i + 1);
-            let input = session
-                .inputs()
-                .iter()
-                .find(|inp| inp.name() == name)
-                .with_context(|| format!("frozen model has no input {name}"))?;
-            let ValueType::Tensor { shape, .. } = input.dtype() else {
-                anyhow::bail!("{name} is not a tensor");
-            };
-            *slot = shape.to_vec();
+        if arch == Arch::Rvm {
+            for (i, slot) in state_shapes.iter_mut().enumerate() {
+                let name = format!("r{}i", i + 1);
+                let input = session
+                    .inputs()
+                    .iter()
+                    .find(|inp| inp.name() == name)
+                    .with_context(|| format!("frozen model has no input {name}"))?;
+                let ValueType::Tensor { shape, .. } = input.dtype() else {
+                    anyhow::bail!("{name} is not a tensor");
+                };
+                *slot = shape.to_vec();
+            }
         }
 
         let src = session
@@ -74,8 +100,18 @@ impl Matting {
         let plane = (width * height) as usize;
         Ok(Matting {
             session,
+            arch,
             state: None,
             state_shapes,
+            plate: Vec::new(),
+            plate_f16: Vec::new(),
+            bgmv2_outputs: {
+                ort::session::RunOptions::new()?.with_outputs(
+                    ort::session::OutputSelector::no_default()
+                        .with("pha")
+                        .with("fgr"),
+                )
+            },
             width,
             height,
             fp16,
@@ -83,6 +119,28 @@ impl Matting {
             fgr: vec![0.0; plane * 3],
             pha: vec![0.0; plane],
         })
+    }
+
+    pub fn arch(&self) -> Arch {
+        self.arch
+    }
+
+    /// Supply BackgroundMattingV2's background plate: the empty scene, in the
+    /// same NCHW normalized layout as a frame. Converted once, reused per frame.
+    pub fn set_background(&mut self, rgb_nchw: &[f32]) -> Result<()> {
+        let expected = (self.width * self.height) as usize * 3;
+        if rgb_nchw.len() != expected {
+            anyhow::bail!(
+                "background plate has {} values, expected {expected}",
+                rgb_nchw.len()
+            );
+        }
+        if self.fp16 {
+            self.plate_f16 = rgb_nchw.iter().map(|&v| f16::from_f32(v)).collect();
+        } else {
+            self.plate = rgb_nchw.to_vec();
+        }
+        Ok(())
     }
 
     fn zero_state(&self) -> Result<[DynValue; 4]> {
@@ -115,6 +173,67 @@ impl Matting {
     /// `rgb_nchw` must be `3 * width * height` normalized to [0,1].
     /// Returns `(fgr, pha)` borrowed from internal buffers.
     pub fn infer(&mut self, rgb_nchw: &[f32]) -> Result<(&[f32], &[f32])> {
+        match self.arch {
+            Arch::Rvm => self.infer_rvm(rgb_nchw),
+            Arch::Bgmv2 => self.infer_bgmv2(rgb_nchw),
+        }
+    }
+
+    /// BackgroundMattingV2 compares each frame against a fixed background
+    /// plate. It has no temporal memory, so there is nothing to carry forward.
+    fn infer_bgmv2(&mut self, rgb_nchw: &[f32]) -> Result<(&[f32], &[f32])> {
+        if (self.fp16 && self.plate_f16.is_empty()) || (!self.fp16 && self.plate.is_empty()) {
+            anyhow::bail!(
+                "this model is BackgroundMattingV2 and needs a background plate; \
+                 pass --plate <image> (capture one with `matting capture-plate`)"
+            );
+        }
+        let shape = vec![1i64, 3, self.height as i64, self.width as i64];
+        let (src, bgr): (SessionInputValue, SessionInputValue) = if self.fp16 {
+            for (dst, &s) in self.src_f16.iter_mut().zip(rgb_nchw) {
+                *dst = f16::from_f32(s);
+            }
+            (
+                TensorRef::from_array_view((shape.clone(), self.src_f16.as_slice()))?.into(),
+                TensorRef::from_array_view((shape, self.plate_f16.as_slice()))?.into(),
+            )
+        } else {
+            (
+                TensorRef::from_array_view((shape.clone(), rgb_nchw))?.into(),
+                TensorRef::from_array_view((shape, self.plate.as_slice()))?.into(),
+            )
+        };
+
+        // BackgroundMattingV2 declares six outputs; we use two. Asking only for
+        // those lets ONNX Runtime prune the nodes feeding the rest, and avoids
+        // copying several full-resolution tensors back to host memory.
+        let outputs = self.session.run_with_options(
+            vec![
+                (std::borrow::Cow::from("src"), src),
+                (std::borrow::Cow::from("bgr"), bgr),
+            ],
+            &self.bgmv2_outputs,
+        )?;
+
+        if self.fp16 {
+            let (_, fgr) = outputs["fgr"].try_extract_tensor::<f16>()?;
+            for (dst, s) in self.fgr.iter_mut().zip(fgr) {
+                *dst = s.to_f32();
+            }
+            let (_, pha) = outputs["pha"].try_extract_tensor::<f16>()?;
+            for (dst, s) in self.pha.iter_mut().zip(pha) {
+                *dst = s.to_f32();
+            }
+        } else {
+            let (_, fgr) = outputs["fgr"].try_extract_tensor::<f32>()?;
+            self.fgr.copy_from_slice(fgr);
+            let (_, pha) = outputs["pha"].try_extract_tensor::<f32>()?;
+            self.pha.copy_from_slice(pha);
+        }
+        Ok((&self.fgr, &self.pha))
+    }
+
+    fn infer_rvm(&mut self, rgb_nchw: &[f32]) -> Result<(&[f32], &[f32])> {
         let state = match self.state.take() {
             Some(s) => s,
             None => self.zero_state()?,

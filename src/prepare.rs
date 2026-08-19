@@ -94,25 +94,61 @@ pub fn run(args: &PrepareArgs) -> Result<()> {
     let bytes = std::fs::read(source).with_context(|| format!("reading {}", source.display()))?;
     let model = ModelProto::parse_from_bytes(&bytes).context("not a valid ONNX model")?;
 
-    // Trust the model over the flag, but tell the user when they disagree.
-    let channels = read_state_channels(&model)?;
-    if channels != args.model.expected_channels() {
-        anyhow::bail!(
-            "--model {:?} expects state channels {:?} but this model declares {:?}; \
-             pass the matching --model",
-            args.model,
-            args.model.expected_channels(),
-            channels
-        );
-    }
+    // BackgroundMattingV2 is recognised by its second image input. Its exports
+    // are already shape-static, so there is nothing to rewrite — the graph
+    // surgery below exists only for RVM's runtime `downsample_ratio`.
+    let graph = model.graph.as_ref().context("model has no graph")?;
+    let is_bgmv2 = graph.input.iter().any(|i| i.name == "bgr");
 
-    println!(
-        "Freezing graph to {}x{} at ratio {}",
-        args.width, args.height, args.ratio
-    );
-    let frozen = freeze_model(model, args.width, args.height, args.ratio)?;
     let frozen_path = frozen_model_path(&dir);
-    std::fs::write(&frozen_path, frozen.write_to_bytes()?)?;
+    if is_bgmv2 {
+        let src = graph
+            .input
+            .iter()
+            .find(|i| i.name == "src")
+            .context("BackgroundMattingV2 model has no `src` input")?;
+        let dims: Vec<i64> = src
+            .type_
+            .as_ref()
+            .context("`src` has no type")?
+            .tensor_type()
+            .shape
+            .dim
+            .iter()
+            .map(|d| d.dim_value())
+            .collect();
+        if dims != vec![1, 3, args.height as i64, args.width as i64] {
+            anyhow::bail!(
+                "this BackgroundMattingV2 export is {:?}, but --width/--height ask for \
+                 [1, 3, {}, {}]. Re-export it at the resolution you intend to use; its \
+                 shapes are baked in at export time.",
+                dims,
+                args.height,
+                args.width
+            );
+        }
+        println!("BackgroundMattingV2 export detected; shapes already static, no rewrite needed");
+        std::fs::copy(source, &frozen_path)?;
+    } else {
+        // Trust the model over the flag, but tell the user when they disagree.
+        let channels = read_state_channels(&model)?;
+        if channels != args.model.expected_channels() {
+            anyhow::bail!(
+                "--model {:?} expects state channels {:?} but this model declares {:?}; \
+                 pass the matching --model",
+                args.model,
+                args.model.expected_channels(),
+                channels
+            );
+        }
+
+        println!(
+            "Freezing graph to {}x{} at ratio {}",
+            args.width, args.height, args.ratio
+        );
+        let frozen = freeze_model(model, args.width, args.height, args.ratio)?;
+        std::fs::write(&frozen_path, frozen.write_to_bytes()?)?;
+    }
     println!("Wrote {}", frozen_path.display());
 
     set_migraphx_cache_env(&dir)?;

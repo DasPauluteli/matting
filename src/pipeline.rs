@@ -85,6 +85,71 @@ impl Pipeline {
     }
 }
 
+/// Load a background plate and convert it to the model's NCHW layout.
+/// The plate must match the capture resolution exactly — it is compared
+/// pixel-for-pixel against each frame.
+fn load_plate(path: &str, width: u32, height: u32) -> Result<Vec<f32>> {
+    let img = image::open(path)
+        .with_context(|| format!("opening background plate {path}"))?
+        .to_rgb8();
+    if img.width() != width || img.height() != height {
+        anyhow::bail!(
+            "background plate {path} is {}x{} but the camera is {width}x{height}; \
+             capture a new one with `matting capture-plate`",
+            img.width(),
+            img.height()
+        );
+    }
+    let plane = (width * height) as usize;
+    let mut out = vec![0f32; plane * 3];
+    for (i, px) in img.pixels().enumerate() {
+        out[i] = px[0] as f32 / 255.0;
+        out[plane + i] = px[1] as f32 / 255.0;
+        out[2 * plane + i] = px[2] as f32 / 255.0;
+    }
+    Ok(out)
+}
+
+/// Grab one frame from the camera and save it as a background plate.
+pub fn capture_plate(args: &crate::cli::CapturePlateArgs) -> Result<()> {
+    let dir = prepare::cache_dir();
+    let (width, height) = match Manifest::load(&dir) {
+        Ok(m) => (m.width, m.height),
+        // Without a prepared model, fall back to the project default so the
+        // plate can still be captured before `prepare` has been run.
+        Err(_) => (1024, 576),
+    };
+
+    println!("Capturing a {width}x{height} background plate from {}.", args.input);
+    println!("Step out of frame — capturing in {} seconds.", args.delay);
+    let mut source = V4lSource::open(&args.input, width, height)?;
+    for remaining in (1..=args.delay).rev() {
+        println!("  {remaining}...");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        // Keep draining so the frame we finally keep is current, not stale.
+        let _ = source.next_frame();
+    }
+
+    let frame = source.next_frame()?.to_vec();
+    let (w, h) = (width as usize, height as usize);
+    let mut rgb_nchw = vec![0f32; w * h * 3];
+    yuyv_to_rgb_f32_nchw(&frame, w, h, Matrix::BT601_LIMITED, &mut rgb_nchw);
+
+    let plane = w * h;
+    let mut img = image::RgbImage::new(width, height);
+    for (i, px) in img.pixels_mut().enumerate() {
+        *px = image::Rgb([
+            (rgb_nchw[i] * 255.0).round().clamp(0.0, 255.0) as u8,
+            (rgb_nchw[plane + i] * 255.0).round().clamp(0.0, 255.0) as u8,
+            (rgb_nchw[2 * plane + i] * 255.0).round().clamp(0.0, 255.0) as u8,
+        ]);
+    }
+    img.save(&args.output)
+        .with_context(|| format!("writing {}", args.output))?;
+    println!("Saved {}. Keep the camera still from now on.", args.output);
+    Ok(())
+}
+
 pub fn run(args: &RunArgs) -> Result<()> {
     args.validate().map_err(anyhow::Error::msg)?;
     let colour = crate::cli::parse_color(&args.color).map_err(anyhow::Error::msg)?;
@@ -112,7 +177,23 @@ pub fn run(args: &RunArgs) -> Result<()> {
             frozen.display()
         );
     }
-    let model = Matting::load(&frozen, width, height)?;
+    let mut model = Matting::load(&frozen, width, height)?;
+
+    if model.arch() == crate::model::Arch::Bgmv2 {
+        let path = args.plate.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "the prepared model is BackgroundMattingV2, which needs a background plate.\n\
+                 Capture one with:  matting capture-plate --input {} --output background.png\n\
+                 then pass it with --plate background.png",
+                args.input
+            )
+        })?;
+        let plate = load_plate(path, width, height)?;
+        model.set_background(&plate)?;
+        println!("Using background plate {path}");
+    } else if args.plate.is_some() {
+        eprintln!("note: --plate is ignored; the prepared model is RVM, which needs no plate");
+    }
 
     let background = match args.mode {
         Mode::Image => Some(Background::load(

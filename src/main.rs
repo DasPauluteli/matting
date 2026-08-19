@@ -22,6 +22,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Prepare(args) => matting::prepare::run(&args),
         Command::Run(args) => matting::pipeline::run(&args),
+        Command::CapturePlate(args) => matting::pipeline::capture_plate(&args),
         Command::Completions(args) => {
             let mut cmd = Cli::command();
             let name = cmd.get_name().to_string();
